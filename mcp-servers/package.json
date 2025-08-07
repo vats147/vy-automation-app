@@ -1,0 +1,22 @@
+{
+  "name": "vy-automation-mcp-servers",
+  "version": "1.0.0",
+  "description": "MCP servers for Vy Automation structured screen data",
+  "main": "index.js",
+  "scripts": {
+    "start:screen": "node screen_state.js",
+    "start:ui": "node ui_automation.js", 
+    "start:accessibility": "node accessibility.js",
+    "start:all": "concurrently \"npm run start:screen\" \"npm run start:ui\" \"npm run start:accessibility\"",
+    "dev": "npm run start:all"
+  },
+  "dependencies": {
+    "ws": "^8.14.2"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  },
+  "keywords": ["mcp", "automation", "screen", "ui", "accessibility"],
+  "author": "Vy Automation",
+  "license": "MIT"
+}
