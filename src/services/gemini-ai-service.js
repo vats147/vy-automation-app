@@ -1,67 +1,68 @@
 const { GoogleGenerativeAI } = require('@google/generative-ai');
+const fs = require('fs').promises;
+const path = require('path');
+
+// Helper function to convert local file to generative part
+async function fileToGenerativePart(filePath) {
+    const mimeType = 'image/png'; // Assuming all screenshots are PNGs
+    const data = await fs.readFile(filePath, 'base64');
+    return {
+        inlineData: {
+            data,
+            mimeType
+        },
+    };
+}
 
 class GeminiAIService {
     constructor() {
         this.apiKey = process.env.GEMINI_API_KEY || null;
         this.genAI = null;
         this.model = null;
+        this.visionModel = null;
         this.isInitialized = false;
         
         // System prompt for task automation
-        this.systemPrompt = `You are an intelligent task automation assistant that helps convert natural language commands into structured automation tasks for macOS.
+        this.systemPrompt = `You are an intelligent task automation assistant for a desktop environment. Your job is to analyze user commands and return a JSON structure that describes the automation steps needed. Break down complex tasks into simple, granular steps using the available actions. Always return valid JSON.`;
 
-Your job is to analyze user commands and return a JSON structure that describes the automation steps needed.
+        this.agentSystemPrompt = `You are a highly intelligent autonomous agent designed to operate a computer.
+Your goal is to achieve a high-level objective provided by the user.
+You will be given a screenshot of the current state of the screen, the user's objective, and the history of actions you have already taken.
+Your task is to decide the single next action to take to move closer to the objective.
 
-IMPORTANT RULES:
-1. Always return valid JSON
-2. Break down complex tasks into simple steps
-3. Use the available automation actions
-4. Be specific about coordinates when needed
-5. Include error handling suggestions
+Analyze the screenshot carefully. Your actions should be precise.
 
-Available automation actions:
-- openApp(appName): Open an application
-- clickMouse(x, y, button): Click at coordinates
-- typeText(text): Type text
-- pressKey(key, modifiers): Press keyboard shortcuts
-- delay(ms): Wait for specified time
-- runCommand(command): Execute terminal commands
-- takeScreenshot(): Capture screen
-- moveMouse(x, y): Move mouse cursor
-- dragMouse(fromX, fromY, toX, toY): Drag operation
+Available Actions (return one of these in JSON format):
+- click(x, y, reason): Click at a specific coordinate. Provide a reason for the click.
+- type(text, reason): Type a string of text. Provide a reason for typing this text.
+- pressKey(key, modifiers, reason): Press a special key (e.g., 'enter', 'esc', 'tab').
+- scroll(direction, reason): Scroll the screen 'up' or 'down'.
+- finish(message): Use this action when you believe the objective has been fully achieved. Provide a summary message.
+- fail(message): Use this action if you are stuck or cannot achieve the objective. Provide a reason for the failure.
 
-Example input: "open terminal and run ls command"
-Example output:
+Your response MUST be a single, valid JSON object representing the next action.
+
+Example Response:
 {
-  "intent": "open_terminal_and_run_command",
-  "description": "Open Terminal application and execute ls command",
-  "steps": [
-    {
-      "type": "openApp",
-      "appName": "Terminal",
-      "description": "Open Terminal application"
-    },
-    {
-      "type": "delay",
-      "duration": 2000,
-      "description": "Wait for Terminal to open"
-    },
-    {
-      "type": "typeText",
-      "text": "ls",
-      "description": "Type ls command"
-    },
-    {
-      "type": "pressKey",
-      "key": "enter",
-      "description": "Press Enter to execute command"
-    }
-  ],
-  "estimated_duration": 5000,
-  "risk_level": "low"
+  "action": "click",
+  "x": 520,
+  "y": 340,
+  "reason": "Clicking the 'Login' button to proceed."
 }
 
-Always respond with this JSON structure. Be creative but safe.`;
+Another Example:
+{
+  "action": "type",
+  "text": "hello world",
+  "reason": "Typing the message into the chat box."
+}
+
+Final Example:
+{
+  "action": "finish",
+  "message": "Successfully sent the message to xyz."
+}
+`;
     }
 
     async initialize() {
@@ -72,6 +73,8 @@ Always respond with this JSON structure. Be creative but safe.`;
             }
 
             this.genAI = new GoogleGenerativeAI(this.apiKey);
+
+            // Initialize text model
             this.model = this.genAI.getGenerativeModel({ 
                 model: "gemini-pro",
                 generationConfig: {
@@ -82,8 +85,17 @@ Always respond with this JSON structure. Be creative but safe.`;
                 }
             });
 
+            // Initialize vision model
+            this.visionModel = this.genAI.getGenerativeModel({
+                model: "gemini-pro-vision",
+                generationConfig: {
+                    temperature: 0.1,
+                    maxOutputTokens: 2048,
+                }
+            });
+
             this.isInitialized = true;
-            console.log('✅ Gemini AI Service initialized');
+            console.log('✅ Gemini AI Service initialized with text and vision models');
             return true;
 
         } catch (error) {
@@ -321,6 +333,49 @@ Make the command more specific and actionable. Return just the enhanced command 
         }
 
         return 'I can help you automate tasks on your Mac. Try commands like "open terminal", "take screenshot", or "open Chrome browser".';
+    }
+
+    async getNextAction(task, screenshotPath) {
+        if (!this.isInitialized || !this.visionModel) {
+            throw new Error('Vision model is not initialized.');
+        }
+
+        try {
+            const imagePart = await fileToGenerativePart(screenshotPath);
+
+            const history_string = task.history.map(h => JSON.stringify(h.action)).join('\n');
+
+            const prompt = `
+Objective: ${task.goal}
+
+Action History:
+${history_string || 'No actions taken yet.'}
+
+Based on the objective, history, and the provided screenshot, what is the single next action to perform?
+`;
+
+            const result = await this.visionModel.generateContent([this.agentSystemPrompt, prompt, imagePart]);
+            const response = await result.response;
+            const text = response.text();
+
+            // Extract JSON from response
+            const jsonMatch = text.match(/\{[\s\S]*\}/);
+            if (jsonMatch) {
+                const nextAction = JSON.parse(jsonMatch[0]);
+                console.log('🤖 Agent received next action:', nextAction);
+                return nextAction;
+            }
+
+            throw new Error('Failed to parse JSON response from vision model.');
+
+        } catch (error) {
+            console.error('Failed to get next action from Gemini Vision:', error);
+            // Return a fail action
+            return {
+                action: 'fail',
+                message: `Failed to get next action from AI: ${error.message}`
+            };
+        }
     }
 }
 

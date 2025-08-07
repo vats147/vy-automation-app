@@ -1,5 +1,7 @@
 const GeminiAIService = require('./gemini-ai-service');
 const SystemAutomationService = require('../automation/system-automation');
+const Task = require('../automation/task');
+const AutonomousAgent = require('../automation/autonomous-agent');
 
 class NaturalLanguageProcessor {
     constructor() {
@@ -35,37 +37,66 @@ class NaturalLanguageProcessor {
         }
     }
 
+    isComplex(command) {
+        const keywords = [
+            'send message', 'whatsapp', 'github', 'post', 'find and click',
+            'log in', 'upload', 'download', 'compose', 'resolve issue'
+        ];
+        const lowerCommand = command.toLowerCase();
+        return keywords.some(keyword => lowerCommand.includes(keyword));
+    }
+
     async processCommand(userInput, options = {}) {
-        try {
-            console.log(`🎯 Processing command: "${userInput}"`);
-            
-            // Add to history
-            this.addToHistory(userInput);
-            
-            // Get automation plan from Gemini AI
-            const automationPlan = await this.geminiAI.processNaturalLanguageCommand(userInput);
-            
-            console.log('📋 Automation plan generated:', automationPlan);
-            
-            // Execute the automation plan
-            const results = await this.executeAutomationPlan(automationPlan, options);
-            
-            return {
-                success: true,
-                command: userInput,
-                plan: automationPlan,
-                results: results,
-                timestamp: new Date().toISOString()
-            };
-            
-        } catch (error) {
-            console.error('❌ Failed to process command:', error);
-            return {
-                success: false,
-                command: userInput,
-                error: error.message,
-                timestamp: new Date().toISOString()
-            };
+        this.addToHistory(userInput);
+        console.log(`🎯 Processing command: "${userInput}"`);
+
+        if (this.isComplex(userInput)) {
+            console.log('🤖 Complex task detected. Engaging autonomous agent.');
+            try {
+                const task = new Task(userInput);
+                const agent = new AutonomousAgent(task, this.geminiAI, this.systemAutomation);
+                const result = await agent.run();
+
+                return {
+                    success: result.status === 'completed',
+                    command: userInput,
+                    agent_result: result,
+                    timestamp: new Date().toISOString()
+                };
+
+            } catch (error) {
+                console.error('❌ Autonomous agent failed:', error);
+                return {
+                    success: false,
+                    command: userInput,
+                    error: `Agent failed: ${error.message}`,
+                    timestamp: new Date().toISOString()
+                };
+            }
+        } else {
+            console.log('📋 Simple task detected. Using static planner.');
+            try {
+                const automationPlan = await this.geminiAI.processNaturalLanguageCommand(userInput);
+                console.log('📋 Automation plan generated:', automationPlan);
+                const results = await this.executeAutomationPlan(automationPlan, options);
+
+                return {
+                    success: true,
+                    command: userInput,
+                    plan: automationPlan,
+                    results: results,
+                    timestamp: new Date().toISOString()
+                };
+
+            } catch (error) {
+                console.error('❌ Failed to process command:', error);
+                return {
+                    success: false,
+                    command: userInput,
+                    error: error.message,
+                    timestamp: new Date().toISOString()
+                };
+            }
         }
     }
 
